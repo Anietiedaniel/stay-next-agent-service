@@ -3,8 +3,8 @@ import jwt from 'jsonwebtoken';
 export const protect = (req, res, next) => {
   const token = req.cookies.token || req.headers.authorization?.split(" ")[1];; // get JWT from cookie
 
-  console.log("🔹 Cookie token:", req.cookies?.token);
-  console.log("🔹 Auth header:", req.headers.authorization);
+  console.log("🔹 Cookie token:", req);
+  console.log("🔹 Auth header:", req);
 
 
   if (!token) {

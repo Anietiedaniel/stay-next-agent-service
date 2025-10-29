@@ -12,6 +12,7 @@ export const submitVerification = async (req, res) => {
 
   try {
     const userId = req.user.userId;
+    
     const {
       agencyName,
       agencyEmail,
