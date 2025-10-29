@@ -24,16 +24,16 @@ app.use("/api/google", googleAuthRoutes);
 
 
 // ===== Serve frontend =====
-const frontendPath = path.join(__dirname, "../../frontend/dist");
-app.use(express.static(frontendPath));
+// const frontendPath = path.join(__dirname, "../../frontend/dist");
+// app.use(express.static(frontendPath));
 
-// ===== React Router fallback =====
-app.use((req, res, next) => {
-  if (req.method === "GET" && !req.path.startsWith("/api")) {
-    res.sendFile(path.join(frontendPath, "index.html"));
-  } else {
-    next();
-  }
-});
+// // ===== React Router fallback =====
+// app.use((req, res, next) => {
+//   if (req.method === "GET" && !req.path.startsWith("/api")) {
+//     res.sendFile(path.join(frontendPath, "index.html"));
+//   } else {
+//     next();
+//   }
+// });
 
 export default app;
