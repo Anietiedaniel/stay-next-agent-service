@@ -1,26 +1,29 @@
-// utils/sendEmail.js
-import nodemailer from 'nodemailer';
+import axios from "axios";
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+export const sendEmail = async (to, subject, html) => {
+  try {
+    console.log("📧 Preparing to send email via Brevo API...");
 
-/**
- * Sends an email using Nodemailer
- * @param {Object} options - Mail options
- * @param {string} options.to - Recipient email
- * @param {string} options.subject - Email subject
- * @param {string} options.html - Email HTML body
- */
-export const sendEmail = async ({ to, subject, html }) => {
-  await transporter.sendMail({
-    from: `"Stay Next Real Estate" <${process.env.EMAIL_USER}>`,
-    to,
-    subject,
-    html,
-  });
+    const data = {
+      sender: { name: "Auth System", email: "anietienteabasi12345@gmail.com" },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    };
+
+    const res = await axios.post("https://api.brevo.com/v3/smtp/email", data, {
+      headers: {
+        "api-key": process.env.BREVO_API_KEY,
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log(`✅ Email sent successfully to ${to}`);
+    console.log("📨 Brevo response:", res.data);
+
+    return res.data;
+  } catch (error) {
+    console.error("❌ Email sending error:", error.response?.data || error.message);
+    throw new Error("Email failed to send via Brevo API");
+  }
 };
