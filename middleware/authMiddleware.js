@@ -3,7 +3,9 @@ import jwt from 'jsonwebtoken';
 export const protect = (req, res, next) => {
   const token = req.cookies.token || req.headers.authorization?.split(" ")[1];; // get JWT from cookie
 
-  console.log("🔹 Token from cookie:", token); // <- log raw token
+  console.log("🔹 Cookie token:", req.cookies?.token);
+  console.log("🔹 Auth header:", req.headers.authorization);
+
 
   if (!token) {
     return res.status(401).json({ message: 'No token provided' });
