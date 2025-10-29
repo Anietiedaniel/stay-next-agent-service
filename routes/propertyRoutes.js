@@ -14,7 +14,7 @@ import {
   deleteSingleVideo,
   deleteMultipleVideos,
   deleteYouTubeVideo,
-} from "../controllers/agentpropertiesController.js";
+} from "../controllers/agentPropertiesController.js";
 
 import { protect } from "../middleware/authMiddleware.js";
 import { propertyUpload } from "../middleware/uploadMulter.js";
