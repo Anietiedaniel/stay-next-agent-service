@@ -1,18 +1,36 @@
+// controllers/agentVerification.js
+import axios from "axios";
 import AgentProfile from "../models/agentProfile.js";
 import { uploadToCloudinary } from "../utils/uploadToCloudinary.js";
+
+/**
+ * 🔑 Validate user via Auth service
+ */
+const validateUser = async (token) => {
+  if (!token) throw new Error("No token provided");
+
+  try {
+    const res = await axios.get(`${process.env.AUTH_SERVICE_URL}/api/auth/getMe`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.data.user; // must return { userId, role, isNewUser, ... }
+  } catch (err) {
+    console.error("❌ [validateUser] Auth validation failed:", err.response?.data || err.message);
+    throw new Error("User validation failed");
+  }
+};
 
 /**
  * 🧾 Submit agent verification
  */
 export const submitVerification = async (req, res) => {
   console.log("🟢 [submitVerification] Triggered...");
-  console.log("🔸 User from token:", req.user);
-  console.log("🔸 Body received:", req.body);
-  console.log("🔸 Files received:", req.files);
 
   try {
-    const userId = req.user.userId;
-    
+    const token = req.headers.authorization?.split(" ")[1];
+    const user = await validateUser(token);
+    console.log("🔸 Authenticated user:", user);
+
     const {
       agencyName,
       agencyEmail,
@@ -24,54 +42,27 @@ export const submitVerification = async (req, res) => {
       otherInfo,
     } = req.body;
 
-    console.log("🔹 Extracted fields:", {
-      userId,
-      agencyName,
-      agencyEmail,
-      agencyPhone,
-      phone,
-      state,
-      language,
-      about,
-      otherInfo,
-    });
-
     // Check if already submitted
-    console.log("🕵️ Checking if agent profile already exists...");
-    const existing = await AgentProfile.findOne({ userId });
-    console.log("🔍 Existing profile found:", existing);
-
+    const existing = await AgentProfile.findOne({ userId: user.userId });
     if (existing && existing.status !== "rejected") {
-      console.warn("⚠️ Verification already submitted, skipping...");
-      return res.status(400).json({
-        message: "Verification already submitted. Wait for admin review.",
-      });
+      return res.status(400).json({ message: "Verification already submitted. Wait for admin review." });
     }
 
-    // Uploads (Cloudinary)
-    let nationalIdUrl = "";
-    let agencyLogoUrl = "";
+    // Upload files
+    let nationalIdUrl = existing?.nationalId || "";
+    let agencyLogoUrl = existing?.agencyLogo || "";
 
     if (req.files?.nationalId?.[0]) {
-      console.log("📤 Uploading national ID to Cloudinary...");
-      nationalIdUrl = await uploadToCloudinary(
-        req.files.nationalId[0],
-        "agents/nationalIds"
-      );
+      nationalIdUrl = await uploadToCloudinary(req.files.nationalId[0], "agents/nationalIds");
       console.log("✅ National ID uploaded:", nationalIdUrl);
     }
-
     if (req.files?.agencyLogo?.[0]) {
-      console.log("📤 Uploading agency logo to Cloudinary...");
-      agencyLogoUrl = await uploadToCloudinary(
-        req.files.agencyLogo[0],
-        "agents/logos"
-      );
+      agencyLogoUrl = await uploadToCloudinary(req.files.agencyLogo[0], "agents/logos");
       console.log("✅ Agency logo uploaded:", agencyLogoUrl);
     }
 
     const update = {
-      userId,
+      userId: user.userId,
       agencyName,
       agencyEmail,
       agencyPhone,
@@ -87,23 +78,17 @@ export const submitVerification = async (req, res) => {
       reviewMessage: "",
     };
 
-    console.log("🧱 Creating or updating agent profile with:", update);
-
     const profile = await AgentProfile.findOneAndUpdate(
-      { userId },
+      { userId: user.userId },
       { $set: update },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
     console.log("✅ Verification saved successfully:", profile);
-
-    res.status(201).json({
-      message: "Verification submitted successfully.",
-      profile,
-    });
+    res.status(201).json({ message: "Verification submitted successfully.", profile });
   } catch (error) {
-    console.error("❌ [submitVerification] Error:", error);
-    res.status(500).json({ message: "Verification submission failed." });
+    console.error("❌ [submitVerification] Error:", error.message);
+    res.status(500).json({ message: "Verification submission failed.", error: error.message });
   }
 };
 
@@ -112,27 +97,19 @@ export const submitVerification = async (req, res) => {
  */
 export const getMyVerification = async (req, res) => {
   console.log("🟢 [getMyVerification] Triggered...");
-  console.log("🔸 User from token:", req.user);
 
   try {
-    const userId = req.user.userId;
-    console.log("🔹 Fetching profile for userId:", userId);
+    const token = req.headers.authorization?.split(" ")[1];
+    const user = await validateUser(token);
+    console.log("🔸 Authenticated user:", user);
 
-    const profile = await AgentProfile.findOne({ userId }).select(
-      "-__v -createdAt -updatedAt"
-    );
-
-    console.log("🔍 Found profile:", profile);
-
-    if (!profile) {
-      console.warn("⚠️ No verification found for userId:", userId);
-      return res.status(404).json({ message: "Verification not found." });
-    }
+    const profile = await AgentProfile.findOne({ userId: user.userId }).select("-__v -createdAt -updatedAt");
+    if (!profile) return res.status(404).json({ message: "Verification not found." });
 
     res.status(200).json({ profile });
   } catch (error) {
-    console.error("❌ [getMyVerification] Error:", error);
-    res.status(500).json({ message: "Failed to fetch verification." });
+    console.error("❌ [getMyVerification] Error:", error.message);
+    res.status(500).json({ message: "Failed to fetch verification.", error: error.message });
   }
 };
 
@@ -141,19 +118,14 @@ export const getMyVerification = async (req, res) => {
  */
 export const getVerificationReceipt = async (req, res) => {
   console.log("🟢 [getVerificationReceipt] Triggered...");
-  console.log("🔸 User from token:", req.user);
 
   try {
-    const userId = req.user.userId;
-    console.log("🔹 Fetching verification receipt for userId:", userId);
+    const token = req.headers.authorization?.split(" ")[1];
+    const user = await validateUser(token);
+    console.log("🔸 Authenticated user:", user);
 
-    const profile = await AgentProfile.findOne({ userId });
-    console.log("🔍 Found profile:", profile);
-
-    if (!profile) {
-      console.warn("⚠️ No verification found for userId:", userId);
-      return res.status(404).json({ message: "No verification found." });
-    }
+    const profile = await AgentProfile.findOne({ userId: user.userId });
+    if (!profile) return res.status(404).json({ message: "No verification found." });
 
     const receipt = {
       agent: profile.agencyName || "N/A",
@@ -164,15 +136,10 @@ export const getVerificationReceipt = async (req, res) => {
       logo: profile.agencyLogo,
     };
 
-    console.log("🧾 Constructed receipt:", receipt);
-
-    res.status(200).json({
-      message: "Verification receipt retrieved successfully.",
-      receipt,
-    });
+    res.status(200).json({ message: "Verification receipt retrieved successfully.", receipt });
   } catch (error) {
-    console.error("❌ [getVerificationReceipt] Error:", error);
-    res.status(500).json({ message: "Failed to fetch verification receipt." });
+    console.error("❌ [getVerificationReceipt] Error:", error.message);
+    res.status(500).json({ message: "Failed to fetch verification receipt.", error: error.message });
   }
 };
 
@@ -181,48 +148,28 @@ export const getVerificationReceipt = async (req, res) => {
  */
 export const resubmitVerification = async (req, res) => {
   console.log("🟢 [resubmitVerification] Triggered...");
-  console.log("🔸 User from token:", req.user);
-  console.log("🔸 Body received:", req.body);
-  console.log("🔸 Files received:", req.files);
 
   try {
-    const userId = req.user.userId;
-    console.log("🔹 Checking for existing verification...");
-    const existing = await AgentProfile.findOne({ userId });
-    console.log("🔍 Existing profile:", existing);
+    const token = req.headers.authorization?.split(" ")[1];
+    const user = await validateUser(token);
+    console.log("🔸 Authenticated user:", user);
 
-    if (!existing) {
-      console.warn("⚠️ No verification found to resubmit for user:", userId);
-      return res.status(404).json({ message: "No verification found to resubmit." });
-    }
-
-    if (existing.status !== "rejected") {
-      console.warn("⚠️ Attempt to resubmit when status is:", existing.status);
-      return res.status(400).json({ message: "You can only resubmit if rejected." });
-    }
+    const existing = await AgentProfile.findOne({ userId: user.userId });
+    if (!existing) return res.status(404).json({ message: "No verification found to resubmit." });
+    if (existing.status !== "rejected") return res.status(400).json({ message: "You can only resubmit if rejected." });
 
     let nationalIdUrl = existing.nationalId;
     let agencyLogoUrl = existing.agencyLogo;
 
     if (req.files?.nationalId?.[0]) {
-      console.log("📤 Re-uploading national ID...");
-      nationalIdUrl = await uploadToCloudinary(
-        req.files.nationalId[0],
-        "agents/nationalIds"
-      );
+      nationalIdUrl = await uploadToCloudinary(req.files.nationalId[0], "agents/nationalIds");
       console.log("✅ New national ID URL:", nationalIdUrl);
     }
-
     if (req.files?.agencyLogo?.[0]) {
-      console.log("📤 Re-uploading agency logo...");
-      agencyLogoUrl = await uploadToCloudinary(
-        req.files.agencyLogo[0],
-        "agents/logos"
-      );
+      agencyLogoUrl = await uploadToCloudinary(req.files.agencyLogo[0], "agents/logos");
       console.log("✅ New agency logo URL:", agencyLogoUrl);
     }
 
-    console.log("🧱 Updating existing verification with new data...");
     existing.agencyName = req.body.agencyName || existing.agencyName;
     existing.agencyEmail = req.body.agencyEmail || existing.agencyEmail;
     existing.agencyPhone = req.body.agencyPhone || existing.agencyPhone;
@@ -241,17 +188,10 @@ export const resubmitVerification = async (req, res) => {
     existing.reviewMessage = "";
     existing.submittedAt = new Date();
 
-    console.log("📝 Final data to save:", existing);
-
     await existing.save();
-    console.log("✅ Resubmission saved successfully:", existing);
-
-    res.status(200).json({
-      message: "Verification resubmitted successfully.",
-      profile: existing,
-    });
+    res.status(200).json({ message: "Verification resubmitted successfully.", profile: existing });
   } catch (error) {
-    console.error("❌ [resubmitVerification] Error:", error);
-    res.status(500).json({ message: "Failed to resubmit verification." });
+    console.error("❌ [resubmitVerification] Error:", error.message);
+    res.status(500).json({ message: "Failed to resubmit verification.", error: error.message });
   }
 };
