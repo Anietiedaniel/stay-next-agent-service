@@ -1,5 +1,5 @@
 import express from "express";
-import { protect } from "../middleware/authMiddleware.js";
+// import { protect } from "../middleware/authMiddleware.js";
 import upload from "../middleware/multer.js"; // ✅ use your multer file here
 import {
   submitVerification,
