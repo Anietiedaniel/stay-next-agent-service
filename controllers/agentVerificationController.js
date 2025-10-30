@@ -11,6 +11,7 @@ const fetchUserFromAuth = async (userId) => {
 
   try {
     const { data } = await axios.get(`${process.env.AUTH_SERVICE_URL}/api/auth/internal/users/${userId}`);
+    console.log("agent-data: ", data)
     return data.user;
   } catch (err) {
     console.error("❌ [fetchUserFromAuth] Failed:", err.response?.data || err.message);
@@ -23,6 +24,8 @@ const fetchUserFromAuth = async (userId) => {
  */
 export const submitVerification = async (req, res) => {
   console.log("🟢 [submitVerification] Triggered...");
+  const { userIdd } = req.query;
+  console.log(userIdd)
 
   try {
     const { userId } = req.query;
