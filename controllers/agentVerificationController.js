@@ -24,8 +24,7 @@ const fetchUserFromAuth = async (userId) => {
  */
 export const submitVerification = async (req, res) => {
   console.log("🟢 [submitVerification] Triggered...");
-  const { userIdd } = req.query;
-  console.log(userIdd)
+  console.log("userId: ", req.query.userId)
 
   try {
     const { userId } = req.query;
