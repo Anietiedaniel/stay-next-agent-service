@@ -10,7 +10,7 @@ const fetchUserFromAuth = async (userId) => {
   if (!userId) throw new Error("User ID required");
 
   try {
-    const { data } = await axios.get(`${process.env.AUTH_SERVICE_URL}/internal/users/${userId}`);
+    const { data } = await axios.get(`${process.env.AUTH_SERVICE_URL}/api/auth/internal/users/${userId}`);
     return data.user;
   } catch (err) {
     console.error("❌ [fetchUserFromAuth] Failed:", err.response?.data || err.message);
