@@ -4,32 +4,31 @@ import AgentProfile from "../models/agentProfile.js";
 import { uploadToCloudinary } from "../utils/uploadToCloudinary.js";
 
 /**
- * 🔑 Validate user via Auth service
+ * 🔗 Internal Auth connection
  */
-const validateUser = async (token) => {
-  if (!token) throw new Error("No token provided");
+const fetchUserFromAuth = async (userId) => {
+  if (!userId) throw new Error("User ID required");
 
   try {
-    const res = await axios.get(`${process.env.AUTH_SERVICE_URL}/api/auth/getMe`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    return res.data.user; // must return { userId, role, isNewUser, ... }
+    const { data } = await axios.get(`${process.env.AUTH_SERVICE_URL}/internal/users/${userId}`);
+    return data.user;
   } catch (err) {
-    console.error("❌ [validateUser] Auth validation failed:", err.response?.data || err.message);
-    throw new Error("User validation failed");
+    console.error("❌ [fetchUserFromAuth] Failed:", err.response?.data || err.message);
+    throw new Error("Failed to fetch user from Auth Service");
   }
 };
 
 /**
- * 🧾 Submit agent verification
+ * 🧾 Submit Agent Verification
  */
 export const submitVerification = async (req, res) => {
   console.log("🟢 [submitVerification] Triggered...");
 
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    const user = await validateUser(token);
-    console.log("🔸 Authenticated user:", user);
+    const { userId } = req.query;
+    const user = await fetchUserFromAuth(userId);
+    if (!user) return res.status(404).json({ message: "User not found in Auth Service" });
+    console.log("🔸 Auth user:", user);
 
     const {
       agencyName,
@@ -43,7 +42,7 @@ export const submitVerification = async (req, res) => {
     } = req.body;
 
     // Check if already submitted
-    const existing = await AgentProfile.findOne({ userId: user.userId });
+    const existing = await AgentProfile.findOne({ userId });
     if (existing && existing.status !== "rejected") {
       return res.status(400).json({ message: "Verification already submitted. Wait for admin review." });
     }
@@ -56,13 +55,14 @@ export const submitVerification = async (req, res) => {
       nationalIdUrl = await uploadToCloudinary(req.files.nationalId[0], "agents/nationalIds");
       console.log("✅ National ID uploaded:", nationalIdUrl);
     }
+
     if (req.files?.agencyLogo?.[0]) {
       agencyLogoUrl = await uploadToCloudinary(req.files.agencyLogo[0], "agents/logos");
       console.log("✅ Agency logo uploaded:", agencyLogoUrl);
     }
 
     const update = {
-      userId: user.userId,
+      userId,
       agencyName,
       agencyEmail,
       agencyPhone,
@@ -79,7 +79,7 @@ export const submitVerification = async (req, res) => {
     };
 
     const profile = await AgentProfile.findOneAndUpdate(
-      { userId: user.userId },
+      { userId },
       { $set: update },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
@@ -93,17 +93,17 @@ export const submitVerification = async (req, res) => {
 };
 
 /**
- * 👀 Get logged-in agent’s verification info
+ * 👀 Get Logged-in Agent Verification
  */
 export const getMyVerification = async (req, res) => {
   console.log("🟢 [getMyVerification] Triggered...");
 
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    const user = await validateUser(token);
-    console.log("🔸 Authenticated user:", user);
+    const { userId } = req.query;
+    const user = await fetchUserFromAuth(userId);
+    if (!user) return res.status(404).json({ message: "User not found in Auth Service" });
 
-    const profile = await AgentProfile.findOne({ userId: user.userId }).select("-__v -createdAt -updatedAt");
+    const profile = await AgentProfile.findOne({ userId }).select("-__v -createdAt -updatedAt");
     if (!profile) return res.status(404).json({ message: "Verification not found." });
 
     res.status(200).json({ profile });
@@ -114,17 +114,17 @@ export const getMyVerification = async (req, res) => {
 };
 
 /**
- * 📄 Get verification receipt (summary view)
+ * 📄 Get Verification Receipt (summary)
  */
 export const getVerificationReceipt = async (req, res) => {
   console.log("🟢 [getVerificationReceipt] Triggered...");
 
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    const user = await validateUser(token);
-    console.log("🔸 Authenticated user:", user);
+    const { userId } = req.query;
+    const user = await fetchUserFromAuth(userId);
+    if (!user) return res.status(404).json({ message: "User not found in Auth Service" });
 
-    const profile = await AgentProfile.findOne({ userId: user.userId });
+    const profile = await AgentProfile.findOne({ userId });
     if (!profile) return res.status(404).json({ message: "No verification found." });
 
     const receipt = {
@@ -144,30 +144,30 @@ export const getVerificationReceipt = async (req, res) => {
 };
 
 /**
- * ♻️ Resubmit verification (only if rejected)
+ * ♻️ Resubmit Verification (only if rejected)
  */
 export const resubmitVerification = async (req, res) => {
   console.log("🟢 [resubmitVerification] Triggered...");
 
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    const user = await validateUser(token);
-    console.log("🔸 Authenticated user:", user);
+    const { userId } = req.query;
+    const user = await fetchUserFromAuth(userId);
+    if (!user) return res.status(404).json({ message: "User not found in Auth Service" });
 
-    const existing = await AgentProfile.findOne({ userId: user.userId });
+    const existing = await AgentProfile.findOne({ userId });
     if (!existing) return res.status(404).json({ message: "No verification found to resubmit." });
-    if (existing.status !== "rejected") return res.status(400).json({ message: "You can only resubmit if rejected." });
+    if (existing.status !== "rejected")
+      return res.status(400).json({ message: "You can only resubmit if rejected." });
 
     let nationalIdUrl = existing.nationalId;
     let agencyLogoUrl = existing.agencyLogo;
 
     if (req.files?.nationalId?.[0]) {
       nationalIdUrl = await uploadToCloudinary(req.files.nationalId[0], "agents/nationalIds");
-      console.log("✅ New national ID URL:", nationalIdUrl);
     }
+
     if (req.files?.agencyLogo?.[0]) {
       agencyLogoUrl = await uploadToCloudinary(req.files.agencyLogo[0], "agents/logos");
-      console.log("✅ New agency logo URL:", agencyLogoUrl);
     }
 
     existing.agencyName = req.body.agencyName || existing.agencyName;
