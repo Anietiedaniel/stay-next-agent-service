@@ -3,7 +3,8 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
-import router from './routes/allRoutes.js'
+
+import router from "./routes/allRoutes.js";
 import googleAuthRoutes from "./routes/googleRoute.js";
 
 const __dirname = path.resolve();
@@ -12,28 +13,35 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
-// ✅ Allow frontend origin
-app.use(cors({
-  origin: process.env.CLIENT_URL,
-  credentials: true,
-}));
+// ===== Dynamic Multi-Origin CORS Setup =====
+const allowedOrigins = process.env.CLIENT_URL?.split(",").map(o => o.trim()) || [];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // allow requests with no origin (like Postman or same-service calls)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log(`❌ Blocked by CORS: ${origin}`);
+        callback(new Error(`CORS policy: Origin ${origin} not allowed`));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 // ===== API Routes =====
 app.use("/api/agents", router);
 app.use("/api/google", googleAuthRoutes);
 
-
-// ===== Serve frontend =====
-// const frontendPath = path.join(__dirname, "../../frontend/dist");
-// app.use(express.static(frontendPath));
-
-// // ===== React Router fallback =====
-// app.use((req, res, next) => {
-//   if (req.method === "GET" && !req.path.startsWith("/api")) {
-//     res.sendFile(path.join(frontendPath, "index.html"));
-//   } else {
-//     next();
-//   }
-// });
+// ===== Health check =====
+app.get("/", (req, res) => {
+  res.send("Agent Service is running 🚀");
+});
 
 export default app;
