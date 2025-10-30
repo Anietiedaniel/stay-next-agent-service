@@ -12,7 +12,6 @@ const router = express.Router();
 
 router.post(
   "/submit",
-  protect,
   upload.fields([
     { name: "nationalId", maxCount: 10 },
     { name: "agencyLogo", maxCount: 10 },
@@ -20,12 +19,11 @@ router.post(
   submitVerification
 );
 
-router.get("/my", protect, getMyVerification);
-router.get("/receipt", protect, getVerificationReceipt);
+router.get("/my", getMyVerification);
+router.get("/receipt", getVerificationReceipt);
 
 router.post(
   "/resubmit",
-  protect,
   upload.fields([
     { name: "nationalId", maxCount: 10 },
     { name: "agencyLogo", maxCount: 10 },
