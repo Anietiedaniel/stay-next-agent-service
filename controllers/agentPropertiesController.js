@@ -405,7 +405,7 @@ export const getAllPropertiesWithAgents = async (req, res) => {
     const userResults = await Promise.all(
       agentIds.map(async (id) => {
         try {
-          const response = await axios.get(`${AUTH_SERVICE_URL}/internal/users/${id}`);
+          const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${id}`);
           console.log(`✅ User fetched for ${id}`);
           return { id, data: response.data };
         } catch (err) {
@@ -459,7 +459,7 @@ export const getSingleAgentWithProperties = async (req, res) => {
     // 2️⃣ Fetch user info from Auth Service
     let userInfo = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/internal/users/${userId}`);
+      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${userId}`);
       userInfo = response.data;
       console.log("✅ User info fetched:", userInfo?.name || userInfo?.email);
     } catch (err) {
@@ -507,7 +507,7 @@ export const getPublicAgentWithProperties = async (req, res) => {
     // 2️⃣ Fetch user info using userId from profile
     let userInfo = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/internal/users/${profile.userId}`);
+      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${profile.userId}`);
       userInfo = response.data;
       console.log("✅ User info fetched for agent:", userInfo?.name || userInfo?.email);
     } catch (err) {
@@ -563,7 +563,7 @@ export const getSingleProperty = async (req, res) => {
     // 3️⃣ Fetch agent auth info from Auth service
     let agentUser = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/internal/users/${property.agent}`);
+      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${property.agent}`);
       agentUser = response.data; // contains name, email, phone, etc.
       console.log("res: ", response)
       console.log("✅ Agent user info fetched:", agentUser?.name || agentUser?.email);

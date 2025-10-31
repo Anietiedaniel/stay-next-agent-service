@@ -36,23 +36,23 @@ propertyRouter.get("/filter", getAllPropertiesWithFilter);
 /* ---------- 🔐 PROTECTED (Agent Only) ROUTES ---------- */
 
 // ✅ Get logged-in agent’s own properties
-propertyRouter.get("/my-properties", protect, getSingleAgentWithProperties);
+propertyRouter.get("/my-properties", getSingleAgentWithProperties);
 
 // ✅ Add new property
 propertyRouter.post("/add", protect, propertyUpload, addProperty);
 
 // ✅ Update property
-propertyRouter.put("/:id", protect, propertyUpload, updateProperty);
+propertyRouter.put("/:id", propertyUpload, updateProperty);
 
 // ✅ Delete property
-propertyRouter.delete("/delete/:id", protect, deleteProperty);
+propertyRouter.delete("/delete/:id", deleteProperty);
 
 // ✅ Delete media
-propertyRouter.delete("/delete-image", protect, deleteSingleImage);
-propertyRouter.delete("/delete-images", protect, deleteMultipleImages);
-propertyRouter.delete("/delete-video", protect, deleteSingleVideo);
-propertyRouter.delete("/delete-videos", protect, deleteMultipleVideos);
-propertyRouter.delete("/delete-youtube", protect, deleteYouTubeVideo);
+propertyRouter.delete("/delete-image", deleteSingleImage);
+propertyRouter.delete("/delete-images", deleteMultipleImages);
+propertyRouter.delete("/delete-video", deleteSingleVideo);
+propertyRouter.delete("/delete-videos", deleteMultipleVideos);
+propertyRouter.delete("/delete-youtube", deleteYouTubeVideo);
 
 
 /* ---------- 🧑‍💼 PUBLIC AGENT VIEW ---------- */
