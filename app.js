@@ -21,48 +21,32 @@ console.log(`🌍 Agent Service running in ${isDev ? "DEVELOPMENT" : "PRODUCTION
 
 
 // ============================================================================
-// ✅ CORS CONFIGURATION (Express 5 Safe)
+// ✅ DEV CORS
 // ============================================================================
-
 if (isDev) {
-  // ✅ Allow EVERYTHING in development
   app.use(
     cors({
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "x-user-id"],
-      exposedHeaders: ["x-user-id"]
+      exposedHeaders: ["x-user-id"],
     })
   );
-
-  // ✅ Universal OPTIONS handler (Express 5 Safe)
-  app.options((req, res) => {
-    res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, x-user-id"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-    );
-    return res.sendStatus(200);
-  });
 
   console.log("⚙️ Dev CORS Enabled: All origins allowed");
 
 } else {
-  // ✅ Production (strict)
+// ============================================================================
+// ✅ PROD CORS
+// ============================================================================
   const allowedOrigins =
     process.env.CLIENT_URL?.split(",").map((o) => o.trim()) || [];
 
   const corsOptions = {
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // allow server-to-server requests
+      if (!origin) return callback(null, true); // allow server-to-server
       if (allowedOrigins.includes(origin)) return callback(null, true);
-
       console.log(`❌ Blocked by CORS: ${origin}`);
       return callback(new Error("Not allowed by CORS"));
     },
@@ -74,13 +58,20 @@ if (isDev) {
       "x-user-id",
       "x-requested-with"
     ],
-    exposedHeaders: ["x-user-id"]
+    exposedHeaders: ["x-user-id"],
   };
 
   app.use(cors(corsOptions));
+  console.log("🔒 Prod CORS Enabled: Restricted mode");
+}
 
-  // ✅ Express 5-safe universal OPTIONS
-  app.options((req, res) => {
+
+// ============================================================================
+// ✅ EXPRESS 5 UNIVERSAL PRE-FLIGHT HANDLER (NO WILDCARDS)
+// ============================================================================
+
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
     res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
     res.header("Access-Control-Allow-Credentials", "true");
     res.header(
@@ -92,10 +83,9 @@ if (isDev) {
       "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     );
     return res.sendStatus(200);
-  });
-
-  console.log("🔒 Prod CORS Enabled: Restricted mode");
-}
+  }
+  next();
+});
 
 
 // ============================================================================
