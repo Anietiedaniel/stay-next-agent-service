@@ -1,21 +1,34 @@
 import Property from "../models/agentProperties.js";
-import AgentProfile from "../models/agentProfile.js"
+import AgentProfile from "../models/agentProfile.js";
 import cloudinary from "../config/cloudinaryConfig.js";
 import { formatBuffer, ensureTempFile } from "../middleware/uploadMulter.js";
 import { youtube } from "../config/google.js";
 import fs from "fs";
 import axios from "axios";
 
-const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || "http://localhost:3001"; 
+const isLocalhost = process.env.NODE_ENV !== "production";
+
+const AUTH_INTERNAL = isLocalhost
+  ? "http://localhost:3000/api/auth/internal"
+  : "https://stay-next-auth-service-4.onrender.com/api/auth/internal";
 
 
+/* ============================================================
+   ✅ ADD PROPERTY
+   ============================================================ */
 export const addProperty = async (req, res) => {
+   const userId1 = req.headers["x-user-id"];
+    console.log("check: ", userId1)
   try {
+    const userId = req.headers["x-user-id"];
+    console.log("check: ", userId)
+    if (!userId) return res.status(400).json({ message: "User ID missing" });
+
     const {
       title,
       location,
       price,
-      transactionType, // ✅ matches your model
+      transactionType,
       duration,
       type,
       bedrooms,
@@ -24,132 +37,96 @@ export const addProperty = async (req, res) => {
       features,
     } = req.body;
 
-    // --- Validation ---
     if (
       (!req.files?.images || req.files.images.length === 0) &&
       (!req.files?.videos || req.files.videos.length === 0)
     ) {
-      return res.status(400).json({
-        message: "At least one image or video is required",
-      });
+      return res.status(400).json({ message: "At least one image or video required" });
     }
 
-    // --- Upload Images to Cloudinary ---
     const imageUrls = [];
     if (req.files?.images) {
       for (const file of req.files.images) {
-        const formatted = formatBuffer(file);
-        const result = await cloudinary.uploader.upload(formatted.content, {
+        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
           folder: "properties/images",
         });
-        imageUrls.push(result.secure_url);
+        imageUrls.push(upload.secure_url);
       }
     }
 
-    // --- Upload Videos (Cloudinary + YouTube) ---
     const videoUrls = [];
     const youtubeVideoLinks = [];
 
     if (req.files?.videos) {
       for (const file of req.files.videos) {
-        console.log("Uploading video:", file.originalname);
-
-        // Cloudinary upload
-        const formatted = formatBuffer(file);
-        const cloudResult = await cloudinary.uploader.upload(formatted.content, {
+        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
           folder: "properties/videos",
           resource_type: "video",
         });
-        videoUrls.push(cloudResult.secure_url);
+        videoUrls.push(upload.secure_url);
 
-        // --- Prepare file for YouTube ---
-        const filePath = ensureTempFile(file);
+        const tmp = ensureTempFile(file);
 
-        // --- Upload to YouTube ---
-        const safeTitle = String(title || "Property Video").trim();
-        const safeDescription = features
-          ? Array.isArray(features)
-            ? features.join(", ")
-            : String(features).replace(/,/g, ", ")
-          : `Property in ${location} priced at ₦${price}`;
-
-        const youtubeResponse = await youtube.videos.insert({
-          part: "snippet,status", // ✅ correct syntax
+        const yt = await youtube.videos.insert({
+          part: "snippet,status",
           requestBody: {
             snippet: {
-              title: safeTitle,
-              description: safeDescription,
-              tags: ["real estate", "property", "house", "land"],
-              categoryId: "22",
+              title: title || "Property Video",
+              description: features || "Real Estate Property",
+              tags: ["property", "real estate"],
             },
             status: { privacyStatus: "public" },
           },
-          media: {
-            body: fs.createReadStream(filePath),
-          },
+          media: { body: fs.createReadStream(tmp) },
         });
 
-        const youtubeLink = `https://www.youtube.com/watch?v=${youtubeResponse.data.id}`;
-        youtubeVideoLinks.push(youtubeLink);
+        youtubeVideoLinks.push(`https://www.youtube.com/watch?v=${yt.data.id}`);
 
-        fs.unlinkSync(filePath); // cleanup temp file
+        fs.unlinkSync(tmp);
       }
     }
 
-    // --- Save Property in DB ---
     const property = await Property.create({
-      agent: req.user.userId,
+      agent: userId,
       title,
       location,
       price,
       duration,
-      transactionType, // ✅ correct field
+      transactionType,
       type,
-      bedrooms: type?.toLowerCase() === "land" ? 0 : Number(bedrooms) || 0,
-      toilets: type?.toLowerCase() === "land" ? 0 : Number(toilets) || 0,
+      bedrooms: type === "land" ? 0 : Number(bedrooms) || 0,
+      toilets: type === "land" ? 0 : Number(toilets) || 0,
       area,
-      features: features
-        ? Array.isArray(features)
-          ? features
-          : String(features)
-              .split(",")
-              .map((f) => f.trim())
-              .filter((f) => f.length > 0)
-        : [],
+      features: Array.isArray(features)
+        ? features
+        : (features || "").split(",").map((x) => x.trim()),
       images: imageUrls,
-      videos: videoUrls, // ✅ Cloudinary video links
-      youtubeVideos: youtubeVideoLinks, // ✅ YouTube links
+      videos: videoUrls,
+      youtubeVideos: youtubeVideoLinks,
     });
 
-    res
-      .status(201)
-      .json({ property, message: "Property added successfully with media uploads" });
+    res.status(201).json({ property, message: "Property added successfully" });
   } catch (err) {
-    console.error("Error adding property:", err);
-    if (err.errors) console.error("YouTube API errors:", err.errors);
-
-    res.status(500).json({
-      message: "Property upload failed",
-      error: err.message || err.toString(),
-    });
+    console.error("ADD ERROR:", err);
+    res.status(500).json({ message: "Failed to add property", error: err.message });
   }
 };
 
 
-
+/* ============================================================
+   ✅ UPDATE PROPERTY
+   ============================================================ */
 export const updateProperty = async (req, res) => {
   try {
-    // ✅ Find property owned by this agent
+    const userId = req.headers["x-user-id"];
+    if (!userId) return res.status(400).json({ message: "User ID missing" });
+
     const property = await Property.findOne({
       _id: req.params.id,
-      agent: req.user.userId,
+      agent: userId,
     });
+    if (!property) return res.status(404).json({ message: "Property not found" });
 
-    if (!property) {
-      return res.status(404).json({ message: "Property not found" });
-    }
-
-    // ✅ Extract allowed fields from req.body
     const {
       title,
       location,
@@ -162,24 +139,20 @@ export const updateProperty = async (req, res) => {
       area,
       features,
       youtubeVideos,
-    } = req.body || {};
+    } = req.body;
 
-    // ✅ Upload new images if any
-    if (req.files?.images?.length) {
+    if (req.files?.images) {
       for (const file of req.files.images) {
-        const formatted = formatBuffer(file);
-        const upload = await cloudinary.uploader.upload(formatted.content, {
+        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
           folder: "properties/images",
         });
         property.images.push(upload.secure_url);
       }
     }
 
-    // ✅ Upload new videos if any
-    if (req.files?.videos?.length) {
+    if (req.files?.videos) {
       for (const file of req.files.videos) {
-        const formatted = formatBuffer(file);
-        const upload = await cloudinary.uploader.upload(formatted.content, {
+        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
           folder: "properties/videos",
           resource_type: "video",
         });
@@ -187,7 +160,6 @@ export const updateProperty = async (req, res) => {
       }
     }
 
-    // ✅ Update all other fields (only those in schema)
     if (title) property.title = title;
     if (location) property.location = location;
     if (price) property.price = price;
@@ -196,468 +168,342 @@ export const updateProperty = async (req, res) => {
     if (type) property.type = type;
     if (area) property.area = area;
 
-    // ✅ Land check (auto zero bedrooms/toilets)
-    const isLand = type?.toLowerCase() === "land";
-    property.bedrooms = isLand ? 0 : bedrooms ? Number(bedrooms) : property.bedrooms;
-    property.toilets = isLand ? 0 : toilets ? Number(toilets) : property.toilets;
+    property.bedrooms = type === "land" ? 0 : bedrooms ? Number(bedrooms) : property.bedrooms;
+    property.toilets = type === "land" ? 0 : toilets ? Number(toilets) : property.toilets;
 
-    // ✅ Features array update
-    if (features) {
+    if (features)
       property.features = Array.isArray(features)
         ? features
         : features.split(",").map((f) => f.trim());
-    }
 
-    // ✅ YouTube links update (array of URLs)
-    if (youtubeVideos) {
+    if (youtubeVideos)
       property.youtubeVideos = Array.isArray(youtubeVideos)
         ? youtubeVideos
-        : youtubeVideos.split(",").map((url) => url.trim());
-    }
+        : youtubeVideos.split(",").map((u) => u.trim());
 
     await property.save();
 
-    res.status(200).json({
-      message: "✅ Property updated successfully",
-      property,
-    });
+    res.status(200).json({ message: "Property updated", property });
   } catch (err) {
-    console.error("❌ Property update error:", err);
-    res.status(500).json({
-      message: "Property update failed",
-      error: err.message,
-    });
+    console.error("UPDATE ERROR:", err);
+    res.status(500).json({ message: "Update failed", error: err.message });
   }
 };
 
 
-// --- Delete Property ---
+/* ============================================================
+   ✅ DELETE PROPERTY
+   ============================================================ */
 export const deleteProperty = async (req, res) => {
   try {
-    const property = await Property.findOneAndDelete({
+    const userId = req.headers["x-user-id"];
+    const removed = await Property.findOneAndDelete({
       _id: req.params.id,
-      agent: req.user.userId,
+      agent: userId,
     });
-    if (!property)
-      return res.status(404).json({ message: "Property not found" });
 
-    res.status(200).json({ message: "Property deleted successfully" });
+    if (!removed) return res.status(404).json({ message: "Property not found" });
+
+    res.status(200).json({ message: "Property deleted" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Property deletion failed" });
+    res.status(500).json({ message: "Delete failed" });
   }
 };
 
-// --- Delete single image ---
-export const deleteSingleImage = async (req, res) => {
-  const { propertyId, imageUrl } = req.body;
-  if (!propertyId || !imageUrl)
-    return res
-      .status(400)
-      .json({ message: "Property ID and image URL required" });
 
+/* ============================================================
+   ✅ DELETE SINGLE IMAGE
+   ============================================================ */
+export const deleteSingleImage = async (req, res) => {
   try {
+    const { propertyId, imageUrl } = req.body;
+
     const property = await Property.findById(propertyId);
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.images = property.images.filter((img) => img !== imageUrl);
     await property.save();
 
-    res
-      .status(200)
-      .json({ message: "Image deleted successfully", images: property.images });
+    res.status(200).json({ message: "Image deleted", images: property.images });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to delete image" });
   }
 };
 
-// --- Delete multiple images ---
-export const deleteMultipleImages = async (req, res) => {
-  const { propertyId, imageUrls } = req.body;
-  if (!propertyId || !imageUrls || !Array.isArray(imageUrls))
-    return res
-      .status(400)
-      .json({ message: "Property ID and image URLs required" });
 
+/* ============================================================
+   ✅ DELETE MULTIPLE IMAGES
+   ============================================================ */
+export const deleteMultipleImages = async (req, res) => {
   try {
+    const { propertyId, imageUrls } = req.body;
     const property = await Property.findById(propertyId);
-    if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.images = property.images.filter((img) => !imageUrls.includes(img));
     await property.save();
 
-    res
-      .status(200)
-      .json({ message: "Images deleted successfully", images: property.images });
+    res.status(200).json({ message: "Images deleted", images: property.images });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to delete images" });
   }
 };
 
-// --- Delete single Cloudinary video ---
-export const deleteSingleVideo = async (req, res) => {
-  const { propertyId, videoUrl } = req.body;
-  if (!propertyId || !videoUrl)
-    return res.status(400).json({ message: "Property ID and video URL required" });
 
+/* ============================================================
+   ✅ DELETE SINGLE VIDEO
+   ============================================================ */
+export const deleteSingleVideo = async (req, res) => {
   try {
+    const { propertyId, videoUrl } = req.body;
+
     const property = await Property.findById(propertyId);
     if (!property) return res.status(404).json({ message: "Property not found" });
 
-    // Remove from DB
-    property.videos = property.videos.filter((vid) => vid !== videoUrl);
+    property.videos = property.videos.filter((v) => v !== videoUrl);
     await property.save();
 
-    // Also remove from Cloudinary
-    const publicId = videoUrl.split("/").slice(-1)[0].split(".")[0]; // extract id from URL
+    const publicId = videoUrl.split("/").pop().split(".")[0];
     await cloudinary.uploader.destroy(`properties/videos/${publicId}`, {
       resource_type: "video",
     });
 
-    res.status(200).json({ message: "Video deleted successfully", videos: property.videos });
+    res.status(200).json({ message: "Video deleted", videos: property.videos });
   } catch (err) {
-    console.error("Delete video error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to delete video" });
   }
 };
 
-// --- Delete multiple Cloudinary videos ---
+
+/* ============================================================
+   ✅ DELETE MULTIPLE VIDEOS
+   ============================================================ */
 export const deleteMultipleVideos = async (req, res) => {
-  const { propertyId, videoUrls } = req.body;
-  if (!propertyId || !videoUrls || !Array.isArray(videoUrls))
-    return res.status(400).json({ message: "Property ID and video URLs required" });
-
   try {
-    const property = await Property.findById(propertyId);
-    if (!property) return res.status(404).json({ message: "Property not found" });
+    const { propertyId, videoUrls } = req.body;
 
-    // Remove from DB
-    property.videos = property.videos.filter((vid) => !videoUrls.includes(vid));
+    const property = await Property.findById(propertyId);
+    property.videos = property.videos.filter((v) => !videoUrls.includes(v));
     await property.save();
 
-    // Remove each from Cloudinary
     for (const url of videoUrls) {
-      const publicId = url.split("/").slice(-1)[0].split(".")[0];
+      const publicId = url.split("/").pop().split(".")[0];
       await cloudinary.uploader.destroy(`properties/videos/${publicId}`, {
         resource_type: "video",
       });
     }
 
-    res.status(200).json({ message: "Videos deleted successfully", videos: property.videos });
+    res.status(200).json({ message: "Videos deleted", videos: property.videos });
   } catch (err) {
-    console.error("Delete multiple videos error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to delete videos" });
   }
 };
 
-// --- Delete YouTube video link (DB only, not from YouTube platform) ---
+
+/* ============================================================
+   ✅ DELETE YOUTUBE LINK
+   ============================================================ */
 export const deleteYouTubeVideo = async (req, res) => {
-  const { propertyId, youtubeUrl } = req.body;
-  if (!propertyId || !youtubeUrl)
-    return res.status(400).json({ message: "Property ID and YouTube URL required" });
-
   try {
-    const property = await Property.findById(propertyId);
-    if (!property) return res.status(404).json({ message: "Property not found" });
+    const { propertyId, youtubeUrl } = req.body;
 
-    property.youtubeVideos = property.youtubeVideos.filter((yt) => yt !== youtubeUrl);
+    const property = await Property.findById(propertyId);
+    property.youtubeVideos = property.youtubeVideos.filter((u) => u !== youtubeUrl);
     await property.save();
 
-    res.status(200).json({
-      message: "YouTube video link removed from property",
-      youtubeVideos: property.youtubeVideos,
-    });
+    res.status(200).json({ message: "YouTube link removed", youtubeVideos: property.youtubeVideos });
   } catch (err) {
-    console.error("Delete YouTube video error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to delete YouTube link" });
   }
 };
 
+
+/* ============================================================
+   ✅ GET ALL PROPERTIES + MERGED AGENT INFO
+   ============================================================ */
 export const getAllPropertiesWithAgents = async (req, res) => {
   try {
-    console.log("🚀 Fetching all properties...");
+    const properties = await Property.find().sort({ createdAt: -1 }).lean();
 
-    // 1️⃣ Get all properties
-    const properties = await Property.find().sort({ dateListed: -1 }).lean();
-    console.log("📦 Properties found:", properties.length);
     if (!properties.length)
-      return res.status(200).json({ properties: [], message: "No properties found" });
+      return res.status(200).json({ properties: [] });
 
-    // Log sample
-    console.log("🧱 Sample property:", properties[0]);
+    const agentIds = [...new Set(properties.map((p) => p.agent))];
 
-    // 2️⃣ Extract unique agent IDs
-    const agentIds = [...new Set(properties.map((p) => String(p.agent)))];
-    console.log("🆔 Unique agent IDs:", agentIds);
+    const profiles = await AgentProfile.find({
+      userId: { $in: agentIds },
+    }).lean();
 
-    // 3️⃣ Fetch agent profiles
-    const profiles = await AgentProfile.find({ userId: { $in: agentIds } }).lean();
-    console.log("✅ Profiles found:", profiles.length);
-    if (profiles.length) console.log("👤 Sample profile:", profiles[0]);
+    const profileMap = Object.fromEntries(
+      profiles.map((p) => [String(p.userId), p])
+    );
 
-    const profileMap = Object.fromEntries(profiles.map((p) => [String(p.userId), p]));
-    console.log("🗺️ Profile map keys:", Object.keys(profileMap));
-
-    // 4️⃣ Fetch user details from Auth Service
-    console.log("🌐 Fetching user details from Auth Service...");
     const userResults = await Promise.all(
       agentIds.map(async (id) => {
         try {
-          const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${id}`);
-          console.log(`✅ User fetched for ${id}`);
-          return { id, data: response.data };
-        } catch (err) {
-          console.warn(`⚠️ Failed to fetch user ${id}:`, err.response?.status || err.message);
+          const res = await axios.get(`${AUTH_INTERNAL}/users/${id}`);
+          return { id, data: res.data };
+        } catch {
           return { id, data: null };
         }
       })
     );
 
-    const userMap = Object.fromEntries(userResults.map(({ id, data }) => [id, data]));
-    console.log("🗺️ User map keys:", Object.keys(userMap));
+    const userMap = Object.fromEntries(userResults.map((u) => [u.id, u.data]));
 
-    // 5️⃣ Merge data
-    const enrichedProperties = properties.map((p) => {
-      const agentId = String(p.agent);
-      return {
-        ...p,
-        agent: {
-          ...(userMap[agentId] || {}),
-          profile: profileMap[agentId] || {},
-        },
-      };
-    });
+    const enriched = properties.map((p) => ({
+      ...p,
+      agent: {
+        ...(userMap[p.agent] || {}),
+        profile: profileMap[p.agent] || {},
+      },
+    }));
 
-    console.log("🎯 Enriched properties count:", enrichedProperties.length);
-    console.log("🏡 Sample enriched property:", enrichedProperties[0]);
+    res.status(200).json({ properties: enriched });
 
-    res.status(200).json({ properties: enrichedProperties });
   } catch (err) {
-    console.error("❌ Error fetching all properties:", err);
-    res.status(500).json({
-      message: "Fetching all properties failed",
-      error: err.message,
-    });
+    res.status(500).json({ message: "Failed", error: err.message });
   }
 };
 
 
+/* ============================================================
+   ✅ GET LOGGED-IN AGENT + PROPERTIES
+   ============================================================ */
 export const getSingleAgentWithProperties = async (req, res) => {
   try {
-    const userId = req.user.userId; // ✅ get logged-in user's ID from JWT
-    console.log("🔍 Fetching details for logged-in agent ID:", userId);
+    const userId = req.headers["x-user-id"];
 
-    // 1️⃣ Fetch agent profile
     const profile = await AgentProfile.findOne({ userId }).lean();
-    if (!profile) {
-      return res.status(404).json({ message: "Agent profile not found" });
-    }
-    console.log("📄 Agent profile found:", profile);
+    if (!profile) return res.status(404).json({ message: "Agent profile not found" });
 
-    // 2️⃣ Fetch user info from Auth Service
     let userInfo = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${userId}`);
-      userInfo = response.data;
-      console.log("✅ User info fetched:", userInfo?.name || userInfo?.email);
-    } catch (err) {
-      console.warn(`⚠️ Could not fetch user ${userId}:`, err.message);
-    }
+      const res = await axios.get(`${AUTH_INTERNAL}/users/${userId}`);
+      userInfo = res.data;
+    } catch {}
 
-    // 3️⃣ Fetch properties for this agent
-    const properties = await Property.find({ agent: userId })
-      .sort({ dateListed: -1 })
-      .lean();
-    console.log(`🏘️ Found ${properties.length} properties for agent`);
+    const properties = await Property.find({ agent: userId }).lean();
 
-    // 4️⃣ Combine all data
-    const result = {
+    res.status(200).json({
       agent: {
         ...(userInfo || {}),
-        profile: profile || {},
+        profile,
       },
       properties,
-    };
-
-    res.status(200).json(result);
-  } catch (err) {
-    console.error("❌ Error fetching logged-in agent:", err);
-    res.status(500).json({
-      message: "Fetching agent details failed",
-      error: err.message,
     });
+  } catch (err) {
+    res.status(500).json({ message: "Failed", error: err.message });
   }
 };
 
 
+/* ============================================================
+   ✅ GET PUBLIC AGENT + PROPERTIES
+   ============================================================ */
 export const getPublicAgentWithProperties = async (req, res) => {
   try {
     const { agentId } = req.params;
-    console.log("🔍 Public fetching agent ID:", agentId);
 
-    // 1️⃣ Fetch profile first
     const profile = await AgentProfile.findById(agentId).lean();
-    if (!profile) {
-      return res.status(404).json({ message: "Agent profile not found" });
-    }
-    console.log("📄 Agent profile found:", profile);
+    if (!profile) return res.status(404).json({ message: "Agent profile not found" });
 
-    // 2️⃣ Fetch user info using userId from profile
     let userInfo = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${profile.userId}`);
-      userInfo = response.data;
-      console.log("✅ User info fetched for agent:", userInfo?.name || userInfo?.email);
-    } catch (err) {
-      console.warn(`⚠️ Could not fetch user ${profile.userId}:`, err.message);
-    }
+      const res = await axios.get(`${AUTH_INTERNAL}/users/${profile.userId}`);
+      userInfo = res.data;
+    } catch {}
 
-    // 3️⃣ Fetch properties for this agent using userId
-    const properties = await Property.find({ agent: profile.userId })
-      .sort({ dateListed: -1 })
-      .lean();
-    console.log(`🏘️ Found ${properties.length} properties for agent`);
+    const properties = await Property.find({ agent: profile.userId }).lean();
 
-    // 4️⃣ Combine all data
-    const result = {
+    res.status(200).json({
       agent: {
         ...(userInfo || {}),
-        profile: profile || {},
+        profile,
       },
       properties,
-    };
-
-    res.status(200).json(result);
-  } catch (err) {
-    console.error("❌ Error fetching public agent info:", err);
-    res.status(500).json({
-      message: "Fetching public agent details failed",
-      error: err.message,
     });
+  } catch (err) {
+    res.status(500).json({ message: "Failed", error: err.message });
   }
 };
 
 
-/**
- * 👀 Get single property by ID (with agent info)
- * */
-
+/* ============================================================
+   ✅ GET SINGLE PROPERTY (WITH AGENT DETAILS)
+   ============================================================ */
 export const getSingleProperty = async (req, res) => {
   try {
     const { propertyId } = req.params;
-    console.log("Fetching property ID:", propertyId);
 
-    // 1️⃣ Fetch the property
     const property = await Property.findById(propertyId).lean();
     if (!property) return res.status(404).json({ message: "Property not found" });
 
-    console.log("Property found:", property.title);
+    const profile = await AgentProfile.findOne({ userId: property.agent }).lean();
 
-    // 2️⃣ Fetch agent profile
-    const agentProfile = await AgentProfile.findOne({ userId: property.agent }).lean();
-    console.log("agentProfile here: ", agentProfile)
-    if (!agentProfile) console.warn("⚠️ Agent profile not found");
-
-    // 3️⃣ Fetch agent auth info from Auth service
     let agentUser = null;
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/internal/users/${property.agent}`);
-      agentUser = response.data; // contains name, email, phone, etc.
-      console.log("res: ", response)
-      console.log("✅ Agent user info fetched:", agentUser?.name || agentUser?.email);
-    } catch (err) {
-      console.warn(`⚠️ Could not fetch user ${property.agent}:`, err.message);
-    }
+      const response = await axios.get(`${AUTH_INTERNAL}/users/${property.agent}`);
+      agentUser = response.data;
+    } catch {}
 
-    // 4️⃣ Merge profile and auth info
-    const agent = {
-      ...(agentUser || {}),
-      profile: agentProfile || {},
-    };
-
-    // 5️⃣ Return property with enriched agent info
-    return res.status(200).json({
+    res.status(200).json({
       property,
-      agent,
+      agent: {
+        ...(agentUser || {}),
+        profile: profile || {},
+      },
     });
   } catch (err) {
-    console.error("❌ Error fetching single property:", err);
-    return res.status(500).json({ message: "Server error", error: err.message });
+    res.status(500).json({ message: "Server error", error: err.message });
   }
 };
 
-// GET /agents/properties/all?transactionType=Buy
-// or ?transactionType=Rent, Book, Service
-// controllers/propertyController.js
 
-
-// ✅ Get all properties with filters
+/* ============================================================
+   ✅ FILTER PROPERTIES
+   ============================================================ */
 export const getAllPropertiesWithFilter = async (req, res) => {
   try {
     const { transactionType, states, types, priceRange, search } = req.query;
+
     const query = {};
 
-    // 🔹 Filter by transactionType: Buy / Rent / Book / Service
-    if (transactionType) {
-      query.transactionType = { $regex: new RegExp(transactionType, "i") };
-    }
+    if (transactionType) query.transactionType = new RegExp(transactionType, "i");
 
-    // 🔹 Filter by state(s)
     if (states) {
-      const stateArray = states.split(",").map((s) => s.trim());
-      query.location = { $in: stateArray.map((st) => new RegExp(st, "i")) };
+      const arr = states.split(",").map((s) => new RegExp(s.trim(), "i"));
+      query.location = { $in: arr };
     }
 
-    // 🔹 Filter by property type(s)
     if (types) {
-      const typeArray = types.split(",").map((t) => t.trim());
-      query.type = { $in: typeArray.map((tp) => new RegExp(tp, "i")) };
+      const arr = types.split(",").map((t) => new RegExp(t.trim(), "i"));
+      query.type = { $in: arr };
     }
 
-    // 🔹 Filter by price range
     if (priceRange) {
-      const range = priceRange.replace(/[₦kM+\s]/g, "").split("-");
-      if (range.length === 2) {
-        let [min, max] = range.map(Number);
-        // Handle “k”, “M” suffix
-        if (priceRange.toLowerCase().includes("k")) {
-          min *= 1000;
-          max *= 1000;
-        }
-        if (priceRange.toLowerCase().includes("m")) {
-          min *= 1000000;
-          max *= 1000000;
-        }
+      const parts = priceRange.replace(/[₦kM+\s]/g, "").split("-");
+      if (parts.length === 2) {
+        let [min, max] = parts.map(Number);
+        if (priceRange.includes("k")) min *= 1000, max *= 1000;
+        if (priceRange.includes("m")) min *= 1e6, max *= 1e6;
         query.price = { $gte: min, $lte: max };
-      } else if (priceRange.includes("+")) {
-        let base = parseInt(priceRange);
-        if (priceRange.toLowerCase().includes("m")) base *= 1000000;
-        if (priceRange.toLowerCase().includes("k")) base *= 1000;
-        query.price = { $gte: base };
       }
     }
 
-    // 🔹 Search by title, description, or location
     if (search) {
       const regex = new RegExp(search, "i");
       query.$or = [
         { title: regex },
-        { description: regex },
         { location: regex },
         { type: regex },
+        { description: regex },
       ];
     }
 
-    // 🔹 Fetch and sort newest first
-    const properties = await Property.find(query)
-      .populate("agent")
-      .sort({ createdAt: -1 });
+    const properties = await Property.find(query).sort({ createdAt: -1 }).lean();
 
     res.status(200).json({ properties });
-  } catch (error) {
-    console.error("❌ Error filtering properties:", error);
-    res.status(500).json({ message: "Failed to fetch filtered properties" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to filter properties", error: err.message });
   }
 };

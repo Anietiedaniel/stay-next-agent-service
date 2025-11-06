@@ -32,7 +32,7 @@ const agentProfileSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],
-      default: "pending",
+      default: "approved",
     },
     reviewMessage: { type: String, default: "" },
     submittedAt: { type: Date, default: Date.now },
