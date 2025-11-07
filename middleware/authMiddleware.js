@@ -4,7 +4,7 @@ export const protect = (req, res, next) => {
   const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
 
   console.log("🔹 Cookie token:", req.cookies?.token);
-  console.log("🔹 Auth header:", req.headers.authorization);
+  console.log("🔹 Auth header:", req.headers);
 
   if (!token) {
     console.log("⚠️ No token found");

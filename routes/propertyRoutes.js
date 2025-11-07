@@ -39,7 +39,7 @@ propertyRouter.get("/filter", getAllPropertiesWithFilter);
 propertyRouter.get("/my-properties", getSingleAgentWithProperties);
 
 // ✅ Add new property
-propertyRouter.post("/add", protect, propertyUpload, addProperty);
+propertyRouter.post("/add", propertyUpload, addProperty);
 
 // ✅ Update property
 propertyRouter.put("/:id", propertyUpload, updateProperty);
