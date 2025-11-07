@@ -118,7 +118,8 @@ export const addProperty = async (req, res) => {
    ============================================================ */
 export const updateProperty = async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"];
+    const userId = req.headers["x-user-id"]
+    console.log("go on: ", userId)
     if (!userId) return res.status(400).json({ message: "User ID missing" });
 
     const property = await Property.findOne({
