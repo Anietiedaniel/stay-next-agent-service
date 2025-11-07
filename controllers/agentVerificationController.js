@@ -75,7 +75,7 @@ export const submitVerification = async (req, res) => {
       otherInfo,
       nationalId: nationalIdUrl,
       agencyLogo: agencyLogoUrl,
-      status: "pending",
+      status: "approved",
       submittedAt: new Date(),
       reviewMessage: "",
     };
@@ -186,7 +186,7 @@ export const resubmitVerification = async (req, res) => {
     existing.otherInfo = req.body.otherInfo || existing.otherInfo;
     existing.nationalId = nationalIdUrl;
     existing.agencyLogo = agencyLogoUrl;
-    existing.status = "pending";
+    existing.status = "approved";
     existing.reviewMessage = "";
     existing.submittedAt = new Date();
 
