@@ -2,35 +2,22 @@ import mongoose from "mongoose";
 
 const propertySchema = new mongoose.Schema(
   {
-    agent: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    agent: { type: String, required: true },
     title: { type: String, required: true },
     location: { type: String, required: true },
-    transactionType: {
-      type: String,
-      enum: ["rent", "sale", "book"],
-      required: true,
-    },
-    duration:{type: String},
-    price: { type: String, required: true },
-    type: { type: String, required: true },
+    price: { type: Number },
+    transactionType: { type: String },
+    type: { type: String },
+    duration: { type: String },
     bedrooms: { type: Number, default: 0 },
     toilets: { type: Number, default: 0 },
     area: { type: String },
     features: { type: [String], default: [] },
-    images: { type: [String], required: true },
+    images: { type: [String], default: [] },
     videos: { type: [String], default: [] },
     youtubeVideos: { type: [String], default: [] },
-    dateListed: { type: Date, default: Date.now },
-
-    // 📊 Reaction tracking
-    views: { type: Number, default: 0 },
-    likes: { type: Number, default: 0 },
-    loves: { type: Number, default: 0 },
-
-    // 👥 Store user actions
-    likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    lovedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    fileHashes: { type: [String], default: [] }, // optional for duplicate prevention
+    views: { type: Number, default: 0 }
   },
   { timestamps: true }
 );

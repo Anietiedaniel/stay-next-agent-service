@@ -1,10 +1,14 @@
 import Property from "../models/agentProperties.js";
 import AgentProfile from "../models/agentProfile.js";
-import cloudinary from "../config/cloudinaryConfig.js";
-import { formatBuffer, ensureTempFile } from "../middleware/uploadMulter.js";
-import { youtube } from "../config/google.js";
+import { youtube, oauth2Client } from "../config/google.js"
 import fs from "fs";
+import path from "path";
 import axios from "axios";
+import os from "os";
+import { ensureTempFile } from "../middleware/uploadMulter.js";
+import fetch from "node-fetch";
+import FormData from "form-data";
+import crypto from "crypto";
 
 const isLocalhost = process.env.NODE_ENV !== "production";
 
@@ -12,16 +16,49 @@ const AUTH_INTERNAL = isLocalhost
   ? "http://localhost:3000/api/auth/internal"
   : "https://stay-next-auth-service-4.onrender.com/api/auth/internal";
 
+// Helper function to compute SHA256 hash of a file buffer
+function getFileHash(fileBuffer) {
+  return crypto.createHash("sha256").update(fileBuffer).digest("hex");
+}
 
-/* ============================================================
-   ✅ ADD PROPERTY
-   ============================================================ */
+/* ----------------------------------------------
+   ✅ Upload videos to YouTube (server-side)
+------------------------------------------------*/
+const uploadVideosToYouTube = async (videoFiles) => {
+  const youtubeUrls = [];
+
+  for (const file of videoFiles) {
+    const tempPath = ensureTempFile(file);
+
+    const uploadResponse = await youtube.videos.insert({
+      part: ["snippet", "status"],
+      requestBody: {
+        snippet: {
+          title: file.originalname,
+          description: "Property video uploaded via PMS",
+          tags: ["real estate", "property", "listing"],
+        },
+        status: { privacyStatus: "public" },
+      },
+      media: { body: fs.createReadStream(tempPath) },
+    });
+
+    youtubeUrls.push(`https://www.youtube.com/watch?v=${uploadResponse.data.id}`);
+    fs.unlinkSync(tempPath); // cleanup
+  }
+
+  return youtubeUrls;
+};
+
+/* ----------------------------------------------
+   ✅ Add Property Route
+
+/* --------------------------------------------------------
+   ✅ ADD PROPERTY (Cloudinary-only Mode)
+-------------------------------------------------------- */
 export const addProperty = async (req, res) => {
-   const userId1 = req.headers["x-user-id"];
-    console.log("check: ", userId1)
   try {
     const userId = req.headers["x-user-id"];
-    console.log("check: ", userId)
     if (!userId) return res.status(400).json({ message: "User ID missing" });
 
     const {
@@ -35,64 +72,40 @@ export const addProperty = async (req, res) => {
       toilets,
       area,
       features,
+      images = [],
+      videos = [],
+      imageHashes = [],
+      videoCloudHashes = [],
     } = req.body;
 
-    if (
-      (!req.files?.images || req.files.images.length === 0) &&
-      (!req.files?.videos || req.files.videos.length === 0)
-    ) {
-      return res.status(400).json({ message: "At least one image or video required" });
+    // Optional: check daily limit
+    const last24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const uploadCount = await Property.countDocuments({
+      agent: userId,
+      createdAt: { $gte: last24 },
+    });
+    if (uploadCount >= 5) {
+      return res.status(400).json({ message: "Max 5 uploads allowed per 24h" });
     }
 
-    const imageUrls = [];
-    if (req.files?.images) {
-      for (const file of req.files.images) {
-        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
-          folder: "properties/images",
-        });
-        imageUrls.push(upload.secure_url);
-      }
+    // Check for duplicate Cloudinary asset IDs
+    for (const hash of [...imageHashes, ...videoCloudHashes]) {
+      const duplicate = await Property.findOne({
+        agent: userId,
+        fileHashes: hash,
+      });
+      if (duplicate)
+        return res.status(400).json({ message: "Duplicate file detected" });
     }
 
-    const videoUrls = [];
-    const youtubeVideoLinks = [];
-
-    if (req.files?.videos) {
-      for (const file of req.files.videos) {
-        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
-          folder: "properties/videos",
-          resource_type: "video",
-        });
-        videoUrls.push(upload.secure_url);
-
-        const tmp = ensureTempFile(file);
-
-        const yt = await youtube.videos.insert({
-          part: "snippet,status",
-          requestBody: {
-            snippet: {
-              title: title || "Property Video",
-              description: features || "Real Estate Property",
-              tags: ["property", "real estate"],
-            },
-            status: { privacyStatus: "public" },
-          },
-          media: { body: fs.createReadStream(tmp) },
-        });
-
-        youtubeVideoLinks.push(`https://www.youtube.com/watch?v=${yt.data.id}`);
-
-        fs.unlinkSync(tmp);
-      }
-    }
-
+    // Create property using Cloudinary URLs directly
     const property = await Property.create({
       agent: userId,
       title,
       location,
       price,
-      duration,
       transactionType,
+      duration,
       type,
       bedrooms: type === "land" ? 0 : Number(bedrooms) || 0,
       toilets: type === "land" ? 0 : Number(toilets) || 0,
@@ -100,32 +113,203 @@ export const addProperty = async (req, res) => {
       features: Array.isArray(features)
         ? features
         : (features || "").split(",").map((x) => x.trim()),
-      images: imageUrls,
-      videos: videoUrls,
-      youtubeVideos: youtubeVideoLinks,
+      images, // ✅ Cloudinary image URLs directly
+      videos, // ✅ Cloudinary video URLs directly
+      fileHashes: [...imageHashes, ...videoCloudHashes],
     });
 
-    res.status(201).json({ property, message: "Property added successfully" });
+    return res.status(201).json({
+      message: "Property created successfully (Cloudinary URLs saved)",
+      property,
+    });
   } catch (err) {
-    console.error("ADD ERROR:", err);
-    res.status(500).json({ message: "Failed to add property", error: err.message });
+    console.error("ADD PROPERTY ERROR:", err);
+    return res.status(500).json({
+      message: "Failed to create property",
+      error: err.message,
+    });
+  }
+};
+
+/* ============================================================
+   ✅ UPLOAD VIDEO FROM CLOUDINARY TO YOUTUBE
+   ============================================================ */
+
+export const uploadVideoToYouTube = async (req, res) => {
+  try {
+    const { url, propertyId } = req.body;
+    if (!url || !propertyId)
+      return res.status(400).json({ error: "Missing video URL or property ID" });
+
+    // 1️⃣ Download video from Cloudinary to temp folder
+    const tempPath = path.join(os.tmpdir(), `video-${Date.now()}.mp4`);
+    const writer = fs.createWriteStream(tempPath);
+
+    const response = await axios.get(url, { responseType: "stream" });
+    response.data.pipe(writer);
+    await new Promise((resolve, reject) => {
+      writer.on("finish", resolve);
+      writer.on("error", reject);
+    });
+
+    // 2️⃣ Upload video to YouTube
+    const uploadResponse = await youtube.videos.insert({
+      part: ["snippet", "status"],
+      requestBody: {
+        snippet: {
+          title: `Property Video ${Date.now()}`,
+          description: "Uploaded from Cloudinary via backend",
+          tags: ["real estate", "property"],
+          categoryId: "22",
+        },
+        status: { privacyStatus: "unlisted" },
+      },
+      media: { body: fs.createReadStream(tempPath) },
+    });
+
+    // 3️⃣ Build YouTube URL
+    const youtubeId = uploadResponse.data.id;
+    const youtubeUrl = `https://www.youtube.com/watch?v=${youtubeId}`;
+
+    // 4️⃣ Remove temp file
+    fs.unlinkSync(tempPath);
+
+    // 5️⃣ Update property document
+    const property = await Property.findById(propertyId);
+    if (!property)
+      return res.status(404).json({ error: "Property not found" });
+
+    property.videos.push({
+      url: youtubeUrl,
+      platform: "youtube",
+      uploadedAt: new Date(),
+    });
+    await property.save();
+
+    // 6️⃣ Send back both
+    res.status(200).json({
+      success: true,
+      youtubeUrl,
+      property,
+    });
+
+    console.log("✅ YouTube upload successful:", youtubeUrl);
+  } catch (err) {
+    console.error("❌ YouTube upload error:", err);
+    res.status(500).json({ error: "Failed to upload video to YouTube" });
+  }
+};
+
+/* --------------------------------------------------------
+   1️⃣ Create YouTube Upload Session (Frontend uploads directly)
+-------------------------------------------------------- */
+export const createUploadSession = async (req, res) => {
+
+  const { title, description } = req.body;
+
+    const response = await youtube.videos.insert(
+      {
+        part: ["snippet", "status"],
+        requestBody: {
+          snippet: { title, description },
+          status: { privacyStatus: "unlisted" },
+        },
+        // no media here
+      },
+      {
+        auth: oauth2Client,
+        params: { uploadType: "resumable" },
+      }
+    );
+   // Correct place for resumable upload URL
+    const uploadUrl = response?.headers?.location;
+    console.log("Resumable upload URL:", uploadUrl);
+  try {
+    const { title, description } = req.body;
+
+    const response = await youtube.videos.insert(
+      {
+        part: ["snippet", "status"],
+        requestBody: {
+          snippet: { title, description },
+          status: { privacyStatus: "unlisted" },
+        },
+        // no media here
+      },
+      {
+        auth: oauth2Client,
+        params: { uploadType: "resumable" },
+      }
+    );
+
+    // Correct place for resumable upload URL
+    const uploadUrl = response?.headers?.location;
+    console.log("Resumable upload URL:", uploadUrl);
+    if (!uploadUrl) throw new Error("Failed to get resumable upload URL from YouTube");
+
+    res.json({ uploadUrl });
+  } catch (error) {
+    console.error("YouTube session error:", error.message);
+    res.status(500).json({ error: "Failed to create upload session" });
   }
 };
 
 
+/* --------------------------------------------------------
+   2️⃣ Save Final YouTube Video Info After Frontend Upload
+-------------------------------------------------------- */
+export const saveUploadedVideo = async (req, res) => {
+  try {
+    const { videoId, title, propertyId } = req.body;
+    if (!videoId || !propertyId) return res.status(400).json({ message: "Missing videoId or propertyId" });
+
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const property = await Property.findById(propertyId);
+    if (!property) return res.status(404).json({ message: "Property not found" });
+
+    if (!property.youtubeVideos) property.youtubeVideos = [];
+    property.youtubeVideos.push(youtubeUrl);
+    await property.save();
+
+    res.json({ message: "Video saved successfully", videoUrl: youtubeUrl });
+  } catch (error) {
+    console.error("Save video error:", error);
+    res.status(500).json({ error: "Failed to save video" });
+  }
+};
+
+/* --------------------------------------------------------
+   3️⃣ Update Property YouTube Links (optional)
+-------------------------------------------------------- */
+export const updatePropertyVideos = async (req, res) => {
+  try {
+    const { youtubeVideos } = req.body;
+    const { id } = req.params;
+
+    const property = await Property.findByIdAndUpdate(
+      id,
+      { $set: { youtubeVideos } },
+      { new: true }
+    );
+
+    res.json({ message: "Property updated", property });
+  } catch (error) {
+    console.error("Update property videos error:", error);
+    res.status(500).json({ error: "Failed to update property videos" });
+  }
+};
+
+
+
 /* ============================================================
-   ✅ UPDATE PROPERTY
+   ✅ UPDATE PROPERTY WITH DUPLICATE FILE CHECK
    ============================================================ */
 export const updateProperty = async (req, res) => {
   try {
-    const userId = req.headers["x-user-id"]
-    console.log("go on: ", userId)
+    const userId = req.headers["x-user-id"];
     if (!userId) return res.status(400).json({ message: "User ID missing" });
 
-    const property = await Property.findOne({
-      _id: req.params.id,
-      agent: userId,
-    });
+    const property = await Property.findOne({ _id: req.params.id, agent: userId });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     const {
@@ -139,28 +323,12 @@ export const updateProperty = async (req, res) => {
       toilets,
       area,
       features,
-      youtubeVideos,
+      images = [],
+      videos = [],
+      youtubeVideos = [],
     } = req.body;
 
-    if (req.files?.images) {
-      for (const file of req.files.images) {
-        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
-          folder: "properties/images",
-        });
-        property.images.push(upload.secure_url);
-      }
-    }
-
-    if (req.files?.videos) {
-      for (const file of req.files.videos) {
-        const upload = await cloudinary.uploader.upload(formatBuffer(file).content, {
-          folder: "properties/videos",
-          resource_type: "video",
-        });
-        property.videos.push(upload.secure_url);
-      }
-    }
-
+    // 1️⃣ Update basic fields
     if (title) property.title = title;
     if (location) property.location = location;
     if (price) property.price = price;
@@ -177,14 +345,32 @@ export const updateProperty = async (req, res) => {
         ? features
         : features.split(",").map((f) => f.trim());
 
-    if (youtubeVideos)
-      property.youtubeVideos = Array.isArray(youtubeVideos)
-        ? youtubeVideos
-        : youtubeVideos.split(",").map((u) => u.trim());
+    // 2️⃣ Handle new images & prevent duplicates
+    for (const file of images) {
+      const hash = file.buffer ? getFileHash(file.buffer) : file;
+      if (property.fileHashes.includes(hash)) {
+        return res.status(400).json({ message: "Duplicate file detected" });
+      }
+      property.images.push(file);
+      property.fileHashes.push(hash);
+    }
+
+    // 3️⃣ Handle new videos & prevent duplicates
+    for (const file of videos) {
+      const hash = file.buffer ? getFileHash(file.buffer) : file;
+      if (property.fileHashes.includes(hash)) {
+        return res.status(400).json({ message: "Duplicate file detected" });
+      }
+      property.videos.push(file);
+      property.fileHashes.push(hash);
+    }
+
+    // 4️⃣ Update YouTube links
+    if (youtubeVideos.length) property.youtubeVideos.push(...youtubeVideos);
 
     await property.save();
 
-    res.status(200).json({ message: "Property updated", property });
+    res.status(200).json({ message: "Property updated successfully", property });
   } catch (err) {
     console.error("UPDATE ERROR:", err);
     res.status(500).json({ message: "Update failed", error: err.message });
@@ -198,10 +384,7 @@ export const updateProperty = async (req, res) => {
 export const deleteProperty = async (req, res) => {
   try {
     const userId = req.headers["x-user-id"];
-    const removed = await Property.findOneAndDelete({
-      _id: req.params.id,
-      agent: userId,
-    });
+    const removed = await Property.findOneAndDelete({ _id: req.params.id, agent: userId });
 
     if (!removed) return res.status(404).json({ message: "Property not found" });
 
@@ -218,7 +401,6 @@ export const deleteProperty = async (req, res) => {
 export const deleteSingleImage = async (req, res) => {
   try {
     const { propertyId, imageUrl } = req.body;
-
     const property = await Property.findById(propertyId);
     if (!property) return res.status(404).json({ message: "Property not found" });
 
@@ -239,6 +421,7 @@ export const deleteMultipleImages = async (req, res) => {
   try {
     const { propertyId, imageUrls } = req.body;
     const property = await Property.findById(propertyId);
+    if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.images = property.images.filter((img) => !imageUrls.includes(img));
     await property.save();
@@ -256,17 +439,11 @@ export const deleteMultipleImages = async (req, res) => {
 export const deleteSingleVideo = async (req, res) => {
   try {
     const { propertyId, videoUrl } = req.body;
-
     const property = await Property.findById(propertyId);
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.videos = property.videos.filter((v) => v !== videoUrl);
     await property.save();
-
-    const publicId = videoUrl.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(`properties/videos/${publicId}`, {
-      resource_type: "video",
-    });
 
     res.status(200).json({ message: "Video deleted", videos: property.videos });
   } catch (err) {
@@ -281,17 +458,11 @@ export const deleteSingleVideo = async (req, res) => {
 export const deleteMultipleVideos = async (req, res) => {
   try {
     const { propertyId, videoUrls } = req.body;
-
     const property = await Property.findById(propertyId);
+    if (!property) return res.status(404).json({ message: "Property not found" });
+
     property.videos = property.videos.filter((v) => !videoUrls.includes(v));
     await property.save();
-
-    for (const url of videoUrls) {
-      const publicId = url.split("/").pop().split(".")[0];
-      await cloudinary.uploader.destroy(`properties/videos/${publicId}`, {
-        resource_type: "video",
-      });
-    }
 
     res.status(200).json({ message: "Videos deleted", videos: property.videos });
   } catch (err) {
@@ -306,8 +477,9 @@ export const deleteMultipleVideos = async (req, res) => {
 export const deleteYouTubeVideo = async (req, res) => {
   try {
     const { propertyId, youtubeUrl } = req.body;
-
     const property = await Property.findById(propertyId);
+    if (!property) return res.status(404).json({ message: "Property not found" });
+
     property.youtubeVideos = property.youtubeVideos.filter((u) => u !== youtubeUrl);
     await property.save();
 
@@ -318,26 +490,20 @@ export const deleteYouTubeVideo = async (req, res) => {
 };
 
 
-/* ============================================================
-   ✅ GET ALL PROPERTIES + MERGED AGENT INFO
-   ============================================================ */
 export const getAllPropertiesWithAgents = async (req, res) => {
   try {
+    // Fetch all properties
     const properties = await Property.find().sort({ createdAt: -1 }).lean();
+    if (!properties.length) return res.status(200).json({ properties: [] });
 
-    if (!properties.length)
-      return res.status(200).json({ properties: [] });
-
+    // Get unique agent IDs
     const agentIds = [...new Set(properties.map((p) => p.agent))];
 
-    const profiles = await AgentProfile.find({
-      userId: { $in: agentIds },
-    }).lean();
+    // Fetch agent profiles
+    const profiles = await AgentProfile.find({ userId: { $in: agentIds } }).lean();
+    const profileMap = Object.fromEntries(profiles.map((p) => [String(p.userId), p]));
 
-    const profileMap = Object.fromEntries(
-      profiles.map((p) => [String(p.userId), p])
-    );
-
+    // Fetch agent user data from AUTH_INTERNAL
     const userResults = await Promise.all(
       agentIds.map(async (id) => {
         try {
@@ -348,19 +514,16 @@ export const getAllPropertiesWithAgents = async (req, res) => {
         }
       })
     );
-
     const userMap = Object.fromEntries(userResults.map((u) => [u.id, u.data]));
 
+    // Enrich properties with agent info and include `views`
     const enriched = properties.map((p) => ({
       ...p,
-      agent: {
-        ...(userMap[p.agent] || {}),
-        profile: profileMap[p.agent] || {},
-      },
+      views: p.views || 0, // ensure views is present
+      agent: { ...(userMap[p.agent] || {}), profile: profileMap[p.agent] || {} },
     }));
 
     res.status(200).json({ properties: enriched });
-
   } catch (err) {
     res.status(500).json({ message: "Failed", error: err.message });
   }
@@ -373,24 +536,23 @@ export const getAllPropertiesWithAgents = async (req, res) => {
 export const getSingleAgentWithProperties = async (req, res) => {
   try {
     const userId = req.headers["x-user-id"];
-
     const profile = await AgentProfile.findOne({ userId }).lean();
     if (!profile) return res.status(404).json({ message: "Agent profile not found" });
 
     let userInfo = null;
-    try {
-      const res = await axios.get(`${AUTH_INTERNAL}/users/${userId}`);
-      userInfo = res.data;
-    } catch {}
+    try { userInfo = (await axios.get(`${AUTH_INTERNAL}/users/${userId}`)).data; } catch {}
 
     const properties = await Property.find({ agent: userId }).lean();
 
+    console.log("props: ", properties)
+
+        // Calculate total views across all properties
+    const totalViews = properties.reduce((sum, p) => sum + (p.views || 0), 0);
+
     res.status(200).json({
-      agent: {
-        ...(userInfo || {}),
-        profile,
-      },
+      agent: { ...(userInfo || {}), profile },
       properties,
+      totalViews, // new field for KPI
     });
   } catch (err) {
     res.status(500).json({ message: "Failed", error: err.message });
@@ -404,25 +566,15 @@ export const getSingleAgentWithProperties = async (req, res) => {
 export const getPublicAgentWithProperties = async (req, res) => {
   try {
     const { agentId } = req.params;
-
     const profile = await AgentProfile.findById(agentId).lean();
     if (!profile) return res.status(404).json({ message: "Agent profile not found" });
 
     let userInfo = null;
-    try {
-      const res = await axios.get(`${AUTH_INTERNAL}/users/${profile.userId}`);
-      userInfo = res.data;
-    } catch {}
+    try { userInfo = (await axios.get(`${AUTH_INTERNAL}/users/${profile.userId}`)).data; } catch {}
 
     const properties = await Property.find({ agent: profile.userId }).lean();
 
-    res.status(200).json({
-      agent: {
-        ...(userInfo || {}),
-        profile,
-      },
-      properties,
-    });
+    res.status(200).json({ agent: { ...(userInfo || {}), profile }, properties });
   } catch (err) {
     res.status(500).json({ message: "Failed", error: err.message });
   }
@@ -432,28 +584,30 @@ export const getPublicAgentWithProperties = async (req, res) => {
 /* ============================================================
    ✅ GET SINGLE PROPERTY (WITH AGENT DETAILS)
    ============================================================ */
+
 export const getSingleProperty = async (req, res) => {
   try {
     const { propertyId } = req.params;
 
-    const property = await Property.findById(propertyId).lean();
+    // Increment views and get updated property
+    const property = await Property.findByIdAndUpdate(
+      propertyId,
+      { $inc: { views: 1 } }, // increment views
+      { new: true, lean: true } // return updated document and plain object
+    );
+
     if (!property) return res.status(404).json({ message: "Property not found" });
 
+    // Get agent profile
     const profile = await AgentProfile.findOne({ userId: property.agent }).lean();
 
+    // Get agent user info (optional)
     let agentUser = null;
     try {
-      const response = await axios.get(`${AUTH_INTERNAL}/users/${property.agent}`);
-      agentUser = response.data;
+      agentUser = (await axios.get(`${AUTH_INTERNAL}/users/${property.agent}`)).data;
     } catch {}
 
-    res.status(200).json({
-      property,
-      agent: {
-        ...(agentUser || {}),
-        profile: profile || {},
-      },
-    });
+    res.status(200).json({ property, agent: { ...(agentUser || {}), profile: profile || {} } });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -466,20 +620,11 @@ export const getSingleProperty = async (req, res) => {
 export const getAllPropertiesWithFilter = async (req, res) => {
   try {
     const { transactionType, states, types, priceRange, search } = req.query;
-
     const query = {};
 
     if (transactionType) query.transactionType = new RegExp(transactionType, "i");
-
-    if (states) {
-      const arr = states.split(",").map((s) => new RegExp(s.trim(), "i"));
-      query.location = { $in: arr };
-    }
-
-    if (types) {
-      const arr = types.split(",").map((t) => new RegExp(t.trim(), "i"));
-      query.type = { $in: arr };
-    }
+    if (states) query.location = { $in: states.split(",").map((s) => new RegExp(s.trim(), "i")) };
+    if (types) query.type = { $in: types.split(",").map((t) => new RegExp(t.trim(), "i")) };
 
     if (priceRange) {
       const parts = priceRange.replace(/[₦kM+\s]/g, "").split("-");
@@ -502,9 +647,10 @@ export const getAllPropertiesWithFilter = async (req, res) => {
     }
 
     const properties = await Property.find(query).sort({ createdAt: -1 }).lean();
-
     res.status(200).json({ properties });
   } catch (err) {
     res.status(500).json({ message: "Failed to filter properties", error: err.message });
   }
 };
+
+ 

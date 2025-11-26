@@ -38,11 +38,6 @@ const agentProfileSchema = new mongoose.Schema(
     submittedAt: { type: Date, default: Date.now },
     reviewedAt: { type: Date },
 
-    // 🤝 Connections
-    clients: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    handymen: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    fellowAgents: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-
     // 📊 Performance / Stats
     sales: {
       total: { type: Number, default: 0 },
@@ -54,6 +49,7 @@ const agentProfileSchema = new mongoose.Schema(
         },
       ],
     },
+
     rented: {
       total: { type: Number, default: 0 },
       recentRented: [
@@ -64,6 +60,7 @@ const agentProfileSchema = new mongoose.Schema(
         },
       ],
     },
+
     booked: {
       total: { type: Number, default: 0 },
       recentBooked: [
@@ -79,10 +76,25 @@ const agentProfileSchema = new mongoose.Schema(
     notifications: {
       enabled: { type: Boolean, default: true },
       unreadCount: { type: Number, default: 0 },
-      lastChecked: { type: Date, default: Date.now }, // 💡 new: track when agent last checked
+      lastChecked: { type: Date, default: Date.now },
+    },
+
+    // 🎁 Referral System
+    referral: {
+      code: { type: String, unique: true },
+      link: { type: String },
+      totalEarnings: { type: Number, default: 0 },
+      referredUsers: [
+        {
+          userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          reward: { type: Number, default: 0 },
+          date: { type: Date, default: Date.now },
+        },
+      ],
     },
   },
   { timestamps: true }
 );
 
 export default mongoose.model("AgentProfile", agentProfileSchema);
+
