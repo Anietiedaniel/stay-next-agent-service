@@ -81,7 +81,7 @@ const agentProfileSchema = new mongoose.Schema(
 
     // 🎁 Referral System
     referral: {
-      code: { type: String, unique: true, sparse: true},
+      code: { type: String, default: null},
       link: { type: String },
       totalEarnings: { type: Number, default: 0 },
       referredUsers: [
